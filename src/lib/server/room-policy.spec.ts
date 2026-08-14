@@ -7,6 +7,7 @@ import {
 	activeParticipants,
 	canJoinRoom,
 	cleanupExpired,
+	isEmptyRoomExpired,
 	secretsMatch,
 	signalsForRecipient
 } from './room-policy';
@@ -64,5 +65,12 @@ describe('temporary signal mailbox policy', () => {
 	it('removes expired records and uses a two-minute lifetime', () => {
 		expect(SIGNAL_LIFETIME_MS).toBe(120_000);
 		expect(cleanupExpired(signals, now).map((signal) => signal.id)).not.toContain('expired');
+	});
+
+	it('only expires rooms with an explicit old empty timestamp', () => {
+		const now = 1_000_000;
+		expect(isEmptyRoomExpired(undefined, now)).toBe(false);
+		expect(isEmptyRoomExpired(now - 1_000, now)).toBe(false);
+		expect(isEmptyRoomExpired(now - 5 * 60 * 1_000 - 1, now)).toBe(true);
 	});
 });

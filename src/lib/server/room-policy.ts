@@ -78,3 +78,7 @@ export function cleanupExpired<T extends { expiresAt: number }>(
 ): T[] {
 	return records.filter((record) => record.expiresAt > now);
 }
+
+export function isEmptyRoomExpired(emptySince: number | undefined, now: number): boolean {
+	return emptySince !== undefined && emptySince < now - EMPTY_ROOM_GRACE_MS;
+}

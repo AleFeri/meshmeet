@@ -1,4 +1,8 @@
-import { EMPTY_ROOM_GRACE_MS, PARTICIPANT_STALE_MS } from '../lib/server/room-policy.js';
+import {
+	EMPTY_ROOM_GRACE_MS,
+	isEmptyRoomExpired,
+	PARTICIPANT_STALE_MS
+} from '../lib/server/room-policy.js';
 import { internalMutation } from './functions.js';
 
 export const run = internalMutation({
@@ -39,10 +43,15 @@ export const run = internalMutation({
 			.take(64);
 		const emptyRooms = await ctx.db
 			.query('rooms')
-			.withIndex('by_empty_since', (query) => query.lt('emptySince', now - EMPTY_ROOM_GRACE_MS))
+			.withIndex('by_empty_since', (query) =>
+				query.gte('emptySince', 0).lt('emptySince', now - EMPTY_ROOM_GRACE_MS)
+			)
 			.take(64);
 		const roomsToDelete = new Map(
-			[...expiredRooms, ...emptyRooms].map((room) => [String(room._id), room])
+			[
+				...expiredRooms,
+				...emptyRooms.filter((room) => isEmptyRoomExpired(room.emptySince, now))
+			].map((room) => [String(room._id), room])
 		);
 		for (const room of roomsToDelete.values()) {
 			const participants = await ctx.db
