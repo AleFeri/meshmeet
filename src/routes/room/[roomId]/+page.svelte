@@ -11,13 +11,25 @@
 	import ScreenStage from '$lib/components/ScreenStage.svelte';
 	import { BRAND, LIMITS } from '$lib/config/brand';
 	import { MicrophoneController, type MicrophoneState } from '$lib/media/microphone';
-	import { ScreenShareController } from '$lib/media/screen-share';
+	import {
+		DEFAULT_SCREEN_SHARE_QUALITY,
+		isScreenShareQuality,
+		SCREEN_SHARE_PROFILES,
+		ScreenShareController,
+		type ScreenShareQuality
+	} from '$lib/media/screen-share';
 	import type { ChatMessage } from '$lib/protocol/chat';
 	import { createPeerId, createSessionToken, sha256Hex } from '$lib/protocol/ids';
 	import { createSignalingAdapter } from '$lib/signaling/create-adapter';
 	import { createIceServerProvider } from '$lib/signaling/create-ice-server-provider';
 	import { RoomFullError, type Participant, type SignalingAdapter } from '$lib/signaling/types';
 	import { pendingCreatedRoomId, pendingDisplayName } from '$lib/stores/journey';
+	import {
+		clearMeetingSession,
+		readMeetingSession,
+		writeMeetingSession,
+		type MeetingSession
+	} from '$lib/stores/meeting-session';
 	import { MeshConnectionManager, type PeerConnectionStatus } from '$lib/webrtc/mesh-manager';
 
 	type ViewState = 'prejoin' | 'joining' | 'meeting';
@@ -55,6 +67,7 @@
 	let announcement = $state('');
 	let audioBlocked = $state(false);
 	let sharing = $state(false);
+	let screenQuality = $state<ScreenShareQuality>(DEFAULT_SCREEN_SHARE_QUALITY);
 	let copied = $state(false);
 
 	let microphoneController: MicrophoneController | null = null;
@@ -63,6 +76,7 @@
 	let manager: MeshConnectionManager | null = null;
 	let heartbeatTimer: number | null = null;
 	let subscriptions: Array<() => void> = [];
+	let pageUnloading = false;
 
 	let selfPeerId = $state('');
 	const otherParticipants = $derived(
@@ -89,17 +103,23 @@
 		microphoneController = new MicrophoneController((state) => {
 			microphone = state;
 		});
-		window.addEventListener('beforeunload', bestEffortLeave);
+		window.addEventListener('beforeunload', markPageUnloading);
+		const savedSession = readMeetingSession(roomId);
+		if (savedSession && !error) {
+			displayName = savedSession.displayName;
+			muted = savedSession.muted;
+			void joinMeeting(savedSession);
+		}
 	});
 
 	onDestroy(() => {
-		window.removeEventListener('beforeunload', bestEffortLeave);
-		void cleanup();
+		window.removeEventListener('beforeunload', markPageUnloading);
+		if (!pageUnloading) clearMeetingSession(roomId);
+		void cleanup(true, !pageUnloading);
 	});
 
-	function bestEffortLeave(): void {
-		manager?.close();
-		void signaling?.leaveRoom();
+	function markPageUnloading(): void {
+		pageUnloading = true;
 	}
 
 	async function prepareMicrophone(deviceId?: string): Promise<void> {
@@ -113,8 +133,8 @@
 		}
 	}
 
-	async function joinMeeting(): Promise<void> {
-		const normalizedName = displayName.trim();
+	async function joinMeeting(savedSession?: MeetingSession): Promise<void> {
+		const normalizedName = (savedSession?.displayName ?? displayName).trim();
 		if (!normalizedName || normalizedName.length > LIMITS.maxDisplayNameLength) {
 			error = `Enter a display name up to ${LIMITS.maxDisplayNameLength} characters.`;
 			return;
@@ -126,8 +146,8 @@
 			const localStream = microphone.stream ?? (await microphoneController?.request());
 			if (!localStream) throw new Error('Microphone access is required to join this voice room.');
 			microphoneController?.setEnabled(!muted);
-			selfPeerId = createPeerId();
-			const sessionToken = createSessionToken();
+			selfPeerId = savedSession?.peerId ?? createPeerId();
+			const sessionToken = savedSession?.sessionToken ?? createSessionToken();
 			const [secretHash, sessionTokenHash] = await Promise.all([
 				sha256Hex(secret),
 				sha256Hex(sessionToken)
@@ -137,7 +157,16 @@
 			await signaling.joinRoom({
 				...credentials,
 				displayName: normalizedName,
-				createIfMissing: get(pendingCreatedRoomId) === roomId
+				createIfMissing: !savedSession && get(pendingCreatedRoomId) === roomId
+			});
+			if (savedSession) await signaling.setScreenSharing(false);
+			writeMeetingSession({
+				version: 1,
+				roomId,
+				peerId: selfPeerId,
+				sessionToken,
+				displayName: normalizedName,
+				muted
 			});
 			pendingCreatedRoomId.set(null);
 			pendingDisplayName.set(normalizedName);
@@ -208,6 +237,8 @@
 
 	function toggleMute(): void {
 		muted = !muted;
+		const savedSession = readMeetingSession(roomId);
+		if (savedSession) writeMeetingSession({ ...savedSession, muted });
 		microphoneController?.setEnabled(!muted);
 		manager?.setMicrophoneEnabled(!muted);
 		announcement = muted ? 'Microphone muted.' : 'Microphone unmuted.';
@@ -220,7 +251,7 @@
 				await screenController?.stop();
 				return;
 			}
-			const stream = await screenController?.start();
+			const stream = await screenController?.start(screenQuality);
 			if (!stream) return;
 			localScreen = stream;
 			sharing = true;
@@ -233,6 +264,19 @@
 					: cause instanceof Error
 						? cause.message
 						: 'Screen sharing could not start.';
+		}
+	}
+
+	async function changeScreenQuality(value: string): Promise<void> {
+		if (!isScreenShareQuality(value)) return;
+		screenQuality = value;
+		try {
+			await screenController?.setQuality(value);
+			const label =
+				SCREEN_SHARE_PROFILES.find((profile) => profile.quality === value)?.label ?? value;
+			announcement = `Screen share quality set to ${label}.`;
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : 'Screen share quality could not be changed.';
 		}
 	}
 
@@ -266,13 +310,13 @@
 		if (!audioBlocked) announcement = 'Remote audio enabled.';
 	}
 
-	async function cleanup(stopMicrophone = true): Promise<void> {
+	async function cleanup(stopMicrophone = true, leaveRoom = true): Promise<void> {
 		if (heartbeatTimer !== null) window.clearInterval(heartbeatTimer);
 		heartbeatTimer = null;
 		for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
 		manager?.close();
 		manager = null;
-		if (signaling) await signaling.leaveRoom();
+		if (signaling && leaveRoom) await signaling.leaveRoom();
 		signaling = null;
 		if (stopMicrophone) microphoneController?.stop();
 		participants = [];
@@ -282,6 +326,7 @@
 	}
 
 	async function leaveMeeting(): Promise<void> {
+		clearMeetingSession(roomId);
 		await cleanup();
 		await goto(resolve('/'));
 	}
@@ -530,14 +575,29 @@
 					aria-pressed={muted}
 					onclick={toggleMute}>{muted ? 'Unmute' : 'Mute'}</button
 				>
-				<button
-					class="control"
-					class:active-control={sharing}
-					data-testid="toggle-screen"
-					aria-pressed={sharing}
-					onclick={() => void toggleScreenShare()}
-					>{sharing ? 'Stop sharing' : 'Share screen'}</button
-				>
+				<div class="share-controls">
+					<button
+						class="control"
+						class:active-control={sharing}
+						data-testid="toggle-screen"
+						aria-pressed={sharing}
+						onclick={() => void toggleScreenShare()}
+						>{sharing ? 'Stop sharing' : 'Share screen'}</button
+					>
+					<label class="quality-control">
+						<span class="sr-only">Screen share quality</span>
+						<select
+							data-testid="screen-quality"
+							aria-label="Screen share quality"
+							value={screenQuality}
+							onchange={(event) => void changeScreenQuality(event.currentTarget.value)}
+						>
+							{#each SCREEN_SHARE_PROFILES as profile (profile.quality)}
+								<option value={profile.quality}>{profile.label}</option>
+							{/each}
+						</select>
+					</label>
+				</div>
 			</div>
 			<div class="control-group secondary-controls">
 				<button class="control" data-testid="copy-invite" onclick={() => void copyInvite()}
@@ -1028,6 +1088,21 @@
 		display: flex;
 		gap: 0.55rem;
 	}
+	.share-controls {
+		display: flex;
+		gap: 0.35rem;
+	}
+	.quality-control select {
+		height: 100%;
+		min-height: 2.85rem;
+		border: 1px solid var(--border);
+		border-radius: 0.8rem;
+		background: var(--surface-2);
+		color: var(--text);
+		padding: 0.65rem 0.55rem;
+		font-weight: 700;
+		cursor: pointer;
+	}
 	.control.active-control {
 		background: #315d4e;
 		color: #eafff5;
@@ -1105,6 +1180,13 @@
 			display: grid;
 			grid-template-columns: repeat(2, 1fr);
 		}
+		.share-controls {
+			min-width: 0;
+		}
+		.share-controls .control {
+			min-width: 0;
+			flex: 1;
+		}
 		.secondary-controls {
 			grid-template-columns: repeat(3, 1fr);
 		}
@@ -1126,7 +1208,8 @@
 			padding: 0.55rem;
 		}
 		.control,
-		.danger-button {
+		.danger-button,
+		.quality-control select {
 			padding: 0.6rem 0.45rem;
 			font-size: 0.75rem;
 		}

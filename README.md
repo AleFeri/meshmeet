@@ -36,7 +36,9 @@ Convex carries only:
 - addressed, expiring WebRTC offers, answers, ICE batches, and renegotiation requests;
 - server-side requests for short-lived TURN credentials.
 
-Convex never receives media or chat. Chat is never stored in Convex, Web Storage, IndexedDB, logs, or analytics. A refresh creates a new empty in-memory chat session, and late joiners do not get history.
+Convex never receives media or chat. Chat is never stored in Convex, Web Storage, IndexedDB, logs, or analytics. A refresh resumes the participant with a tab-scoped session credential while creating a new empty in-memory chat session; late joiners do not get history.
+
+Screen sharing defaults to 1080p at up to 8 Mbps. The sharing participant can choose 720p, 1080p, 1440p, or 4K before or during a share. MeshMeet asks the browser to maintain resolution under pressure, but the selected display surface, browser encoder, available upload bandwidth, and receiver can still impose a lower effective quality.
 
 STUN helps browsers discover direct routes. Some corporate, mobile, or symmetric-NAT networks cannot establish one; TURN then relays the already encrypted WebRTC packets. TURN is therefore part of connectivity, not application signaling or chat storage.
 
@@ -166,7 +168,7 @@ TURN is similarly isolated behind `IceServerProvider` in `src/lib/webrtc/ice-ser
 
 ## Privacy and cost model
 
-Direct calls consume participant bandwidth: in a full mesh each browser sends its microphone and shared screen to three peers. TURN traffic, when needed, is relayed and billed by the TURN provider. Convex usage consists of joins/leaves, 30-second heartbeats, reactive presence and addressed signals, acknowledgements, scheduled deletion, and cleanup. The design avoids high-frequency UI writes and is intended to fit modest free-tier development use, but quotas and provider pricing can change. Check current Convex and Cloudflare limits before public launch.
+Direct calls consume participant bandwidth: in a full mesh each browser sends its microphone and shared screen separately to three peers. At the default 1080p ceiling, a sharer may need up to roughly 24 Mbps of upload for three 8 Mbps peer connections; 1440p and 4K need substantially more. WebRTC congestion control may reduce the actual rate. TURN traffic, when needed, is relayed and billed by the TURN provider. Convex usage consists of joins/leaves, 30-second heartbeats, reactive presence and addressed signals, acknowledgements, scheduled deletion, and cleanup. The design avoids high-frequency UI writes and is intended to fit modest free-tier development use, but quotas and provider pricing can change. Check current Convex and Cloudflare limits before public launch.
 
 This MVP provides transport encryption from WebRTC but not verified human identity or end-to-end identity fingerprints. A compromised browser, invitation holder, TURN/ICE configuration, or application build remains in the threat model.
 
@@ -181,6 +183,7 @@ The four-person cap is fundamental to this mesh MVP. Larger rooms need an SFU an
 - **Microphone blocked:** allow microphone access in the site permission panel, close applications holding exclusive access, and retry the pre-join control.
 - **No microphone label:** labels are intentionally hidden by browsers until permission is granted.
 - **Screen share unavailable:** use desktop HTTPS/localhost, confirm `getDisplayMedia` support, and select a window/tab/screen in the browser-owned picker.
+- **Blurry screen share:** leave quality at 1080p or select 1440p/4K, share the full-resolution source, and check the sharer's upload capacity. Browsers may reduce bitrate when the network or encoder cannot sustain the selected ceiling.
 - **No system audio:** choose a browser tab with “share tab audio” where supported; macOS/Firefox/Safari behavior differs.
 - **Remote audio is silent:** unmute the participant and click **Enable remote audio** if shown.
 - **Stuck on connecting:** check firewall/VPN policies, inspect `chrome://webrtc-internals`, and configure TURN.
@@ -194,10 +197,10 @@ The four-person cap is fundamental to this mesh MVP. Larger rooms need an SFU an
 1. Run Convex and the frontend, open two different browser profiles, and create/join one invitation.
 2. Confirm both participant names appear and change to **Connected**.
 3. Speak in each browser and confirm only remote audio plays; mute/unmute both sides.
-4. Share a browser tab or window from browser A, optionally including tab audio. Confirm browser B shows it on the stage.
-5. Stop sharing from the in-app button, then repeat from browser B. Also stop from the browser's native sharing indicator and confirm cleanup.
+4. Confirm quality defaults to 1080p, share a browser tab or window from browser A, optionally including tab audio, and confirm browser B shows a sharp stage.
+5. Change quality while live, then stop sharing from the in-app button. Repeat from browser B and from the browser's native sharing indicator.
 6. Send chat in both directions, join a third browser, and verify it receives no earlier messages.
-7. Refresh one browser, rejoin, and verify its chat is empty.
+7. Refresh one browser and verify it rejoins automatically while its chat is empty.
 8. Leave one browser and confirm presence disappears promptly.
 9. Join four browsers, then verify a fifth receives the room-full message.
 10. Repeat once across different networks with TURN disabled and enabled; inspect the selected ICE candidate pair to confirm direct versus relay behavior.

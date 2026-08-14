@@ -68,22 +68,31 @@ test('creates a room, connects two contexts, exchanges ephemeral chat, mutes, le
 		'This message only crossed the data channel.'
 	);
 
-	await guest.getByTestId('leave-room').click();
-	await expect(guest).toHaveURL(/\/$/);
-	await expect(host.getByTestId('participant-item')).toHaveCount(1);
-
 	await host.getByTestId('chat-input').fill('Local memory only');
 	await host.getByTestId('send-chat').click();
 	await expect(host.getByTestId('chat-messages')).toContainText('Local memory only');
 	await host.reload();
-	await host.getByTestId('room-display-name').fill('Ada');
-	await joinPreflight(host);
+	await expect(host.getByTestId('participant-list')).toBeVisible();
+	await expect(host.getByTestId('participant-item')).toHaveCount(2);
+	await expect(host.getByText('Connected', { exact: true })).toBeVisible({ timeout: 15_000 });
+	await expect(guest.getByTestId('participant-item')).toHaveCount(2);
 	await host.getByTestId('toggle-chat').click();
 	await expect(host.getByTestId('chat-messages').locator('article')).toHaveCount(0);
 	await expect(host.getByTestId('chat-messages')).not.toContainText('Local memory only');
 
+	await guest.getByTestId('leave-room').click();
+	await expect(guest).toHaveURL(/\/$/);
+	await expect(host.getByTestId('participant-item')).toHaveCount(1);
+
 	await hostContext.close();
 	await guestContext.close();
+});
+
+test('defaults screen sharing to 1080p and exposes higher quality choices', async ({ page }) => {
+	await createRoom(page, 'Ada');
+	const quality = page.getByTestId('screen-quality');
+	await expect(quality).toHaveValue('1080p');
+	await expect(quality.locator('option')).toHaveText(['720p', '1080p', '1440p', '4K']);
 });
 
 test('shows a minimal not-found page for invalid routes', async ({ page }) => {
@@ -105,6 +114,8 @@ test('rejects a fifth participant', async ({ browser }) => {
 			contexts.push(context);
 			await joinInvite(await context.newPage(), name, invitation);
 		}
+		await expect(host.getByTestId('participant-item')).toHaveCount(4);
+		await host.reload();
 		await expect(host.getByTestId('participant-item')).toHaveCount(4);
 
 		const fifthContext = await newContext(browser);

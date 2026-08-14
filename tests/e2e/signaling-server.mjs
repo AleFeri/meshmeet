@@ -22,6 +22,10 @@ function remove(socket) {
 	if (!identity) return;
 	const room = rooms.get(identity.roomKey);
 	if (!room) return;
+	if (room.members.get(identity.peerId)?.socket !== socket) {
+		socket.identity = null;
+		return;
+	}
 	room.members.delete(identity.peerId);
 	broadcastParticipants(room);
 	socket.identity = null;
@@ -47,7 +51,8 @@ server.on('connection', (socket) => {
 				room = { members: new Map() };
 				rooms.set(roomKey, room);
 			}
-			if (room.members.size >= 4) {
+			const existing = room.members.get(message.peerId);
+			if (room.members.size >= 4 && !existing) {
 				send(socket, { type: 'error', code: 'ROOM_FULL', message: 'Room is full.' });
 				return;
 			}
@@ -61,6 +66,7 @@ server.on('connection', (socket) => {
 			};
 			socket.identity = { roomKey, peerId: message.peerId };
 			room.members.set(message.peerId, { socket, participant });
+			existing?.socket.close();
 			send(socket, { type: 'joined', participants: participants(room) });
 			broadcastParticipants(room);
 			return;

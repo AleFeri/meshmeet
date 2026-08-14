@@ -1,6 +1,7 @@
 import { ChatSession } from '$lib/chat/chat-session';
 import type { ChatMessage } from '$lib/protocol/chat';
 import { parseChatMessage } from '$lib/protocol/chat';
+import type { ScreenShareProfile } from '$lib/media/screen-share';
 import type {
 	IceCandidatePayload,
 	IncomingSignal,
@@ -10,6 +11,7 @@ import type {
 import { isIncomingSignal } from '$lib/protocol/signaling';
 import type { Participant } from '$lib/signaling/types';
 import { initialNegotiationState, shouldAcceptDescription } from './negotiation-state';
+import { configureScreenSender } from './screen-encoding';
 
 export type PeerConnectionStatus =
 	'new' | 'connecting' | 'connected' | 'recovering' | 'failed' | 'closed';
@@ -56,6 +58,7 @@ export class MeshConnectionManager {
 	readonly #peers = new Map<string, PeerState>();
 	readonly #chat = new ChatSession();
 	#screenStream: MediaStream | null = null;
+	#screenProfile: ScreenShareProfile | null = null;
 	#closed = false;
 	#unsubscribeChat: () => void;
 
@@ -101,6 +104,7 @@ export class MeshConnectionManager {
 			}
 			if (value.type === 'renegotiate' && value.payload.kind === 'renegotiate') {
 				if (value.payload.reason === 'ice-restart') state.connection.restartIce();
+				else await this.#negotiate(value.fromPeerId, state);
 			}
 		} catch (error) {
 			this.#options.events.onError(
@@ -114,18 +118,33 @@ export class MeshConnectionManager {
 			track.enabled = enabled;
 	}
 
-	async startScreenShare(stream: MediaStream): Promise<void> {
+	async startScreenShare(stream: MediaStream, profile: ScreenShareProfile): Promise<void> {
 		if (this.#closed) throw new Error('Meeting has ended.');
 		await this.stopScreenShare(false);
 		this.#screenStream = stream;
+		this.#screenProfile = profile;
+		const additions: Promise<void>[] = [];
 		for (const [peerId, state] of this.#peers) {
-			this.#addScreenTracks(peerId, state);
+			additions.push(this.#addScreenTracks(peerId, state));
 		}
+		await Promise.all(additions);
+	}
+
+	async updateScreenShareQuality(profile: ScreenShareProfile): Promise<void> {
+		this.#screenProfile = profile;
+		const updates: Promise<boolean>[] = [];
+		for (const state of this.#peers.values()) {
+			for (const sender of state.screenSenders) {
+				if (sender.track?.kind === 'video') updates.push(configureScreenSender(sender, profile));
+			}
+		}
+		await Promise.all(updates);
 	}
 
 	async stopScreenShare(stopTracks = true): Promise<void> {
 		const stream = this.#screenStream;
 		this.#screenStream = null;
+		this.#screenProfile = null;
 		for (const state of this.#peers.values()) {
 			for (const sender of state.screenSenders) {
 				try {
@@ -205,13 +224,25 @@ export class MeshConnectionManager {
 		for (const track of this.#options.localMicrophoneStream.getAudioTracks().slice(0, 1)) {
 			connection.addTrack(track, this.#options.localMicrophoneStream);
 		}
-		if (this.#screenStream) this.#addScreenTracks(peerId, state);
+		if (this.#screenStream) {
+			void this.#addScreenTracks(peerId, state).catch((error: unknown) =>
+				this.#options.events.onError(`Could not configure screen sharing: ${this.#message(error)}`)
+			);
+		}
 		if (this.#options.localPeerId.localeCompare(peerId) < 0) {
 			this.#configureDataChannel(
 				peerId,
 				state,
 				connection.createDataChannel(CHAT_CHANNEL_LABEL, { ordered: true })
 			);
+		} else {
+			// A peer keeping the same participant identity after a refresh needs the
+			// smaller peer to replace its old session immediately instead of waiting
+			// for ICE failure detection.
+			void this.#send(peerId, 'renegotiate', {
+				kind: 'renegotiate',
+				reason: 'initial'
+			});
 		}
 		this.#options.events.onConnectionStatus(peerId, 'connecting');
 		state.connectionTimer = window.setTimeout(() => {
@@ -227,7 +258,12 @@ export class MeshConnectionManager {
 	}
 
 	async #negotiate(peerId: string, state: PeerState): Promise<void> {
-		if (this.#closed || state.connection.signalingState === 'closed') return;
+		if (
+			this.#closed ||
+			state.connection.signalingState === 'closed' ||
+			state.negotiation.makingOffer
+		)
+			return;
 		// Let the lexicographically smaller peer make the first offer. Both peers still
 		// use perfect negotiation for every later renegotiation, but avoiding needless
 		// initial glare also prevents browsers from discarding their first ICE gathering.
@@ -392,13 +428,19 @@ export class MeshConnectionManager {
 		);
 	}
 
-	#addScreenTracks(_peerId: string, state: PeerState): void {
+	async #addScreenTracks(_peerId: string, state: PeerState): Promise<void> {
 		if (!this.#screenStream) return;
+		const configurations: Promise<boolean>[] = [];
 		for (const track of this.#screenStream.getTracks()) {
 			if (track.kind === 'video' || track.kind === 'audio') {
-				state.screenSenders.push(state.connection.addTrack(track, this.#screenStream));
+				const sender = state.connection.addTrack(track, this.#screenStream);
+				state.screenSenders.push(sender);
+				if (track.kind === 'video' && this.#screenProfile) {
+					configurations.push(configureScreenSender(sender, this.#screenProfile));
+				}
 			}
 		}
+		await Promise.all(configurations);
 	}
 
 	#handleConnectionState(peerId: string, state: PeerState): void {
