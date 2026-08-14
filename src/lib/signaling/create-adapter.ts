@@ -8,8 +8,8 @@ export function createSignalingAdapter(
 	client: ConvexClient | null,
 	testSignalingUrl?: string
 ): SignalingAdapter {
-	if (client) return new ConvexSignalingAdapter(client);
 	if (testSignalingUrl) return new WebSocketTestSignalingAdapter(testSignalingUrl);
+	if (client) return new ConvexSignalingAdapter(client);
 	console.warn(
 		'[MeshMeet] PUBLIC_CONVEX_URL is not configured. Using the same-origin BroadcastChannel signaling adapter for local development only.'
 	);

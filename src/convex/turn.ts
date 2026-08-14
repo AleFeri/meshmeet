@@ -1,5 +1,6 @@
 import { anyApi } from 'convex/server';
 import { ConvexError } from 'convex/values';
+import { env } from './_generated/server.js';
 import { credentialsFields } from './validators.js';
 import { action } from './functions.js';
 
@@ -31,8 +32,8 @@ export const getIceServers = action({
 		const authorized = await ctx.runQuery(anyApi.rooms.authorizeTurn, args);
 		if (!authorized) throw new ConvexError('PARTICIPANT_ACCESS');
 
-		const keyId = process.env.CLOUDFLARE_TURN_KEY_ID;
-		const apiToken = process.env.CLOUDFLARE_TURN_API_TOKEN;
+		const keyId = env.CLOUDFLARE_TURN_KEY_ID;
+		const apiToken = env.CLOUDFLARE_TURN_API_TOKEN;
 		if (!keyId || !apiToken) {
 			return {
 				configured: false,

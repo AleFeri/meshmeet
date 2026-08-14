@@ -7,3 +7,10 @@ bun.lockb
 
 # Miscellaneous
 /static/
+
+# Generated and vendored agent/Convex files
+/.agents/
+/.claude/
+/skills-lock.json
+/src/convex/_generated/
+/src/convex/tsconfig.json

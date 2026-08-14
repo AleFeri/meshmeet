@@ -30,6 +30,8 @@ import type { DataModel } from "./dataModel.js";
 type Env = {
   readonly CONVEX_CLOUD_URL: string;
   readonly CONVEX_SITE_URL: string;
+  readonly CLOUDFLARE_TURN_API_TOKEN: string | undefined;
+  readonly CLOUDFLARE_TURN_KEY_ID: string | undefined;
 };
 
 /**
