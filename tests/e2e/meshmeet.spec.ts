@@ -23,6 +23,13 @@ async function joinInvite(page: Page, name: string, invitation: string): Promise
 	await joinPreflight(page);
 }
 
+async function openInvite(page: Page, name: string, invitation: string): Promise<void> {
+	await page.goto(invitation);
+	await expect(page.getByTestId('room-display-name')).toBeVisible();
+	await page.getByTestId('room-display-name').fill(name);
+	await joinPreflight(page);
+}
+
 async function joinPreflight(page: Page): Promise<void> {
 	await page.getByTestId('prepare-microphone').click();
 	await expect(page.getByTestId('microphone-device')).toBeVisible();
@@ -39,7 +46,7 @@ test('creates a room, connects two contexts, exchanges ephemeral chat, mutes, le
 	const guest = await guestContext.newPage();
 
 	const invitation = await createRoom(host, 'Ada');
-	await joinInvite(guest, 'Grace', invitation);
+	await openInvite(guest, 'Grace', invitation);
 
 	await expect(host.getByTestId('participant-item')).toHaveCount(2);
 	await expect(guest.getByTestId('participant-item')).toHaveCount(2);
@@ -77,6 +84,12 @@ test('creates a room, connects two contexts, exchanges ephemeral chat, mutes, le
 
 	await hostContext.close();
 	await guestContext.close();
+});
+
+test('shows a minimal not-found page for invalid routes', async ({ page }) => {
+	await page.goto('/not-a-room');
+	await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'Back home' })).toBeVisible();
 });
 
 test('rejects a fifth participant', async ({ browser }) => {

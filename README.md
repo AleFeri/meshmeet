@@ -125,7 +125,7 @@ Upload the generated `build/` directory.
 
 ### Netlify
 
-Set the build command to `pnpm build`, publish directory to `build`, and add `PUBLIC_CONVEX_URL` as a build environment variable. `static/_redirects` routes room URLs to the SPA fallback.
+Set the build command to `pnpm build`, publish directory to `build`, and add `PUBLIC_CONVEX_URL` as a build environment variable. `static/_redirects` proxies room URLs to the client application while preserving the invite path and fragment.
 
 ```bash
 pnpm dlx netlify-cli deploy --dir=build --prod
@@ -141,7 +141,7 @@ pnpm dlx vercel --prod
 
 ### Cloudflare Pages
 
-Use `pnpm build` and output directory `build`, with `PUBLIC_CONVEX_URL` as a build variable. The generated `404.html` is the client-side room fallback.
+Use `pnpm build` and output directory `build`, with `PUBLIC_CONVEX_URL` as a build variable. The included `_redirects` rule proxies `/room/*` to the client application so direct invite links and refreshes keep their original URL.
 
 ```bash
 pnpm dlx wrangler pages deploy build --project-name meshmeet
