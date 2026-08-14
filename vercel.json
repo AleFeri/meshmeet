@@ -1,0 +1,3 @@
+{
+	"rewrites": [{ "source": "/room/:path*", "destination": "/404.html" }]
+}
